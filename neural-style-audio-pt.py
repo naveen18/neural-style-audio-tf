@@ -7,27 +7,34 @@ import numpy as np
 from torch.autograd import Variable
 from sys import stderr
 
-INPUT_DIR = '/home/naveen/neural-style-audio-tf/inputs/'
+INPUT_DIR = '/home/naveen/neural-style-audio-tf/inputs/monochannel/'
 CONTENT_FILENAME = 'BO10.mp3'
 STYLE_FILENAME = 'DT10.mp3'
+
 CONTENT_WEIGHT = 10
 STYLE_WEIGHT = 600
-ITERATIONS = 300
+ITERATIONS = 10
 
 N_FFT = 2048
 
+# ALPHA = 1e-2
+learning_rate = 1e-2
+
+# use_cuda = torch.cuda.is_available()
+use_cuda = False
+
 def get_input_param_optimizer(input_val):
     # this line to show that input is a parameter that requires a gradient
-    input_param = nn.Parameter(input_val.clone().data)
-    optimizer = optim.LBFGS([input_param])
+    if use_cuda:
+        input_param = nn.Parameter(input_val.clone().data)
+    else:
+        input_param = nn.Parameter(input_val.data)
+    optimizer = optim.LBFGS([input_param], lr = learning_rate, max_iter=10)
     return input_param, optimizer
 
 def read_audio_spectum(filename):
     x, fs = librosa.load(filename)
-    S = librosa.stft(x, N_FFT)
-    p = np.angle(S)
-    S = np.log1p(np.abs(S[:,:430]))  
-    return S, fs
+    return x, fs
 
 class GramMatrix(nn.Module):
 
@@ -81,59 +88,59 @@ class StyleLoss(nn.Module):
 a_content, fs = read_audio_spectum(INPUT_DIR + CONTENT_FILENAME)
 a_style, fs = read_audio_spectum(INPUT_DIR + STYLE_FILENAME)
 
-N_SAMPLES = a_content.shape[1]
-N_CHANNELS = a_content.shape[0]
-a_style = a_style[:N_CHANNELS, :N_SAMPLES]
+# 10 sec audio requires a lot of memory for processing so taking the first half of audio
+N_SAMPLES = int(a_content.shape[0]/5)
+
+N_CHANNELS = 1
+
+a_style = a_style[:N_SAMPLES]
+a_content = a_content[:N_SAMPLES]
 
 N_FILTERS = 4096
 
-# changing x changes the a_content for some reason, so using deepcopy
+# # changing x changes the a_content for some reason, so using deepcopy
 content_copy = np.copy(a_content)
 
-a_content_tf = np.ascontiguousarray(content_copy.T[None,None,:,:])
-a_style_tf = np.ascontiguousarray(a_style.T[None,None,:,:])
+a_content_tf = np.ascontiguousarray(content_copy.T[None,None,:])
+a_style_tf = np.ascontiguousarray(a_style.T[None,None,:])
 
-#rearrange axis to meet conv2d input format requirement
-a_content_tf = np.transpose(a_content_tf, (0, 3, 1, 2))
-a_style_tf = np.transpose(a_style_tf, (0, 3, 1, 2))
-
-# std = np.sqrt(2) * np.sqrt(2.0 / ((N_CHANNELS + N_FILTERS) * 11))
-# kernel = np.random.randn(1, 11, N_CHANNELS, N_FILTERS)*std
-
-content_var = Variable(torch.from_numpy(a_content_tf), requires_grad = False)
-style_var = Variable(torch.from_numpy(a_style_tf), requires_grad = False)
+if use_cuda:
+    content_var = Variable(torch.from_numpy(a_content_tf).cuda(), requires_grad = False)
+    style_var = Variable(torch.from_numpy(a_style_tf).cuda(), requires_grad = False)
+else:
+    content_var = Variable(torch.from_numpy(a_content_tf), requires_grad = False)
+    style_var = Variable(torch.from_numpy(a_style_tf), requires_grad = False)
 
 model = torch.nn.Sequential(
-			torch.nn.Conv2d(N_CHANNELS, N_FILTERS, kernel_size = (1, 11)),
+			torch.nn.Conv1d(N_CHANNELS, N_FILTERS, kernel_size = 4),
 			torch.nn.ReLU()
 		)
+
+gram = GramMatrix()
+
+if use_cuda:
+    gram = gram.cuda()
+    model = model.cuda()
 
 content_features = model(content_var)
 style_features = model(style_var).clone()
 
 style_features = style_features.view(-1, N_FILTERS)
-gram = GramMatrix()
 style_gram_target = gram(style_features)
 
-ALPHA = 1e-2
-learning_rate = 1e-2
-result = None
+# # rand_input = Variable(torch.randn(1, N_CHANNELS, 1, N_SAMPLES).type(torch.FloatTensor)*1e-3, requires_grad = True)
+# # # x, optimizer = get_input_param_optimizer(rand_input)
 
-# x = Variable(torch.randn(1, N_CHANNELS, 1, N_SAMPLES).type(torch.FloatTensor)*1e-3, requires_grad = True)
-rand_input = Variable(torch.randn(1, N_CHANNELS, 1, N_SAMPLES).type(torch.FloatTensor)*1e-3, requires_grad = True)
-# x, optimizer = get_input_param_optimizer(rand_input)
 x, optimizer = get_input_param_optimizer(content_var)
 
-gram = GramMatrix()
 style_loss_module = StyleLoss(style_gram_target, STYLE_WEIGHT)
-content_loss_module = ContentLoss(content_features.clone(), CONTENT_WEIGHT)
+# # content_loss_module = ContentLoss(content_features.clone(), CONTENT_WEIGHT)
 model.add_module("style_loss", style_loss_module)
-# model.add_module("content_loss", content_loss_module)
-
+# # model.add_module("content_loss", content_loss_module)
 
 t = [0]
 while t[0] < ITERATIONS:
-	def closure_version2():
+	def closure():
 		score = 0
 		optimizer.zero_grad()
 		model(x)
@@ -143,34 +150,12 @@ while t[0] < ITERATIONS:
 		score += total_loss
 		print(t[0], score.data[0])
 		return score
-	optimizer.step(closure_version2)
+	optimizer.step(closure)
 
 x = x.data.numpy()
+x = x.flatten()
+print(x.shape)
+librosa.output.write_wav('outputs/1dconvo/BODT-1dConv.wav', x, fs)
 
-#undo the axis remarrangement done before
-x = np.transpose(x, (0, 2, 3, 1))
-x = np.reshape(x, (-1, N_CHANNELS))
-
-if np.array_equal(x.T, a_content):
-	print("equal")
-else:
-	print("not equal")
-
-print("content = ", a_content)
-print("x = ", x)
-diff = a_content - x.T
-print("diff = ", diff)
-
-a = np.zeros_like(a_content)
-a[:N_CHANNELS,:] = np.exp(x.T) - 1
-p = 2 * np.pi * np.random.random_sample(a.shape) - np.pi
-for i in range(500):
-    S = a * np.exp(1j*p)
-    x = librosa.istft(S)
-    p = np.angle(librosa.stft(x, N_FFT))
-
-OUTPUT_FILENAME = 'outputs/' + CONTENT_FILENAME[:-4] + '_' + STYLE_FILENAME[:-4] + '_ctw-' + str(CONTENT_WEIGHT) + '_stw-' + str(STYLE_WEIGHT) + '_iter-' + str(ITERATIONS) + '.wav' 
-librosa.output.write_wav(OUTPUT_FILENAME, x, fs)
-print(OUTPUT_FILENAME)
 print("done")
 
