@@ -7,8 +7,12 @@ import numpy as np
 from torch.autograd import Variable
 from sys import stderr
 
-CONTENT_FILENAME = "/home/naveen/neural-style-audio-tf/inputs/gettysburg.mp3"
-STYLE_FILENAME = "/home/naveen/neural-style-audio-tf/inputs/eminem.mp3"
+INPUT_DIR = '/home/naveen/neural-style-audio-tf/inputs/'
+CONTENT_FILENAME = 'BO10.mp3'
+STYLE_FILENAME = 'DT10.mp3'
+CONTENT_WEIGHT = 10
+STYLE_WEIGHT = 600
+ITERATIONS = 300
 
 N_FFT = 2048
 
@@ -74,8 +78,8 @@ class StyleLoss(nn.Module):
 		return self.loss
 
 
-a_content, fs = read_audio_spectum(CONTENT_FILENAME)
-a_style, fs = read_audio_spectum(STYLE_FILENAME)
+a_content, fs = read_audio_spectum(INPUT_DIR + CONTENT_FILENAME)
+a_style, fs = read_audio_spectum(INPUT_DIR + STYLE_FILENAME)
 
 N_SAMPLES = a_content.shape[1]
 N_CHANNELS = a_content.shape[0]
@@ -113,7 +117,6 @@ style_gram_target = gram(style_features)
 
 ALPHA = 1e-2
 learning_rate = 1e-2
-iterations = 100
 result = None
 
 # x = Variable(torch.randn(1, N_CHANNELS, 1, N_SAMPLES).type(torch.FloatTensor)*1e-3, requires_grad = True)
@@ -122,14 +125,14 @@ rand_input = Variable(torch.randn(1, N_CHANNELS, 1, N_SAMPLES).type(torch.FloatT
 x, optimizer = get_input_param_optimizer(content_var)
 
 gram = GramMatrix()
-style_loss_module = StyleLoss(style_gram_target, 300)
-content_loss_module = ContentLoss(content_features.clone(), 10)
+style_loss_module = StyleLoss(style_gram_target, STYLE_WEIGHT)
+content_loss_module = ContentLoss(content_features.clone(), CONTENT_WEIGHT)
 model.add_module("style_loss", style_loss_module)
 # model.add_module("content_loss", content_loss_module)
 
 
 t = [0]
-while t[0] < 100:
+while t[0] < ITERATIONS:
 	def closure_version2():
 		score = 0
 		optimizer.zero_grad()
@@ -166,7 +169,7 @@ for i in range(500):
     x = librosa.istft(S)
     p = np.angle(librosa.stft(x, N_FFT))
 
-OUTPUT_FILENAME = 'outputs/eminem_gettysberg.wav'
+OUTPUT_FILENAME = 'outputs/' + CONTENT_FILENAME[:-4] + '_' + STYLE_FILENAME[:-4] + '_ctw-' + str(CONTENT_WEIGHT) + '_stw-' + str(STYLE_WEIGHT) + '_iter-' + str(ITERATIONS) + '.wav' 
 librosa.output.write_wav(OUTPUT_FILENAME, x, fs)
 print(OUTPUT_FILENAME)
 print("done")
