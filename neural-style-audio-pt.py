@@ -88,8 +88,7 @@ class StyleLoss(nn.Module):
 a_content, fs = read_audio_spectum(INPUT_DIR + CONTENT_FILENAME)
 a_style, fs = read_audio_spectum(INPUT_DIR + STYLE_FILENAME)
 
-# 10 sec audio requires a lot of memory for processing so taking the first half of audio
-N_SAMPLES = int(a_content.shape[0]/5)
+N_SAMPLES = int(a_content.shape[0])
 
 N_CHANNELS = 1
 
@@ -152,7 +151,11 @@ while t[0] < ITERATIONS:
 		return score
 	optimizer.step(closure)
 
-x = x.data.numpy()
+if use_cuda:
+	x = x.cpu().data.numpy()
+else:
+	x = x.data.numpy()
+
 x = x.flatten()
 print(x.shape)
 librosa.output.write_wav('outputs/1dconvo/BODT-1dConv.wav', x, fs)
